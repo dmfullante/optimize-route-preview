@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>ORP v1.0.1</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        html, body { height: 100%; margin: 0; padding: 0; font-family: Arial, sans-serif; }
+        #container { display: flex; height: 100%; }
+        #sidebar {
+            width: 350px;
+            background: #f7f7f7;
+            padding: 10px;
+            overflow-y: auto;
+            border-right: 1px solid #ddd;
+        }
+        #sidebar h2 { font-size: 16px; margin-top: 0; }
+        #sidebar button {
+            display: block;
+            width: 100%;
+            margin: 3px 0;
+            padding: 6px;
+            background: #eee;
+            border: 1px solid #ccc;
+            cursor: pointer;
+            text-align: left;
+        }
+        #sidebar button:hover { background: #ddd; }
+        #map { flex: 1; }
+    </style>
+</head>
+<body>
+<div id="container">
+    <div id="sidebar">
+        <h2>Optimized Route Preview</h2>
+        <div id="segmentList"></div>
+    </div>
+    <div id="map"></div>
+</div>
+
+<script>
+let map;
+let routeSegments = {};
+const polylines = [];
+const actualRouteSegments = [];
+let activeButton = null;
+let authToken = '';
+
+const urlParams = new URLSearchParams(window.location.search);
+const scheduleId = urlParams.get("scheduleId");
+
+const API_URL = `/api/v1/schedules/optimize/compile/${scheduleId}`;
+const ACTUAL_ROUTE_API = `/api/v1/collector-location-logs/actual/route?schedule_id=${scheduleId}`;
+
+// --- Login and store Bearer token ---
+async function loginAndGetToken(email = 'davemartin.fullante@etapinc.com', password = 'password') {
+    try {
+        const res = await fetch("/api/v1/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email, password })
+        });
+        if (!res.ok) throw new Error("Login failed: " + res.status);
+        const data = await res.json();
+        if (!data.data.token) throw new Error("No token returned");
+        authToken = data.data.token;
+        console.log("Token stored:", authToken);
+        fetchActualRoute();
+    } catch (err) {
+        console.error(err);
+        alert("Login error: " + err.message);
+    }
+}
+
+// --- Fetch actual route using token ---
+async function fetchActualRoute() {
+    if (!authToken) return;
+
+    try {
+        const res = await fetch(ACTUAL_ROUTE_API, {
+            method: "GET",
+            headers: {
+                "Authorization": `Bearer ${authToken}`,
+                "Content-Type": "application/json"
+            }
+        });
+
+        if (!res.ok) throw new Error("Actual route fetch failed: " + res.status);
+
+        const data = await res.json();
+        if (!data.status || !data.data || !data.data.routes) throw new Error("Invalid API response");
+
+        const legs = data.data.routes.legs;
+        actualRouteSegments.length = 0; // clear previous
+
+        // Generate a unique color per segment
+        legs.forEach((leg, index) => {
+            const decodedPath = google.maps.geometry.encoding.decodePath(leg.polyline.encodedPolyline);
+
+            // Unique color via HSL (hue changes per index)
+            const hue = (index * 360 / legs.length) % 360;
+            const color = `hsl(${hue}, 80%, 50%)`;
+
+            actualRouteSegments.push({
+                schedule_detail_id: leg.schedule_detail_id,
+                terminal_name: leg.terminal_name,
+                terminal_id: leg.terminal_id,
+                polyline: decodedPath,
+                start: decodedPath[0],
+                end: decodedPath[decodedPath.length - 1],
+                color
+            });
+        });
+
+        // Add Actual Route button if not exists
+        const segmentList = document.getElementById("segmentList");
+        if (!document.getElementById("actualRouteBtn")) {
+            const totalDistanceMeters = data.data.totalDistanceMeters || 0;
+            const totalDurationSecs = data.data.totalDuration || 0;
+            const totalDistance = (totalDistanceMeters / 1000).toFixed(2) + " km";
+            const totalDuration = formatDuration(totalDurationSecs);
+
+            const actualBtn = document.createElement("button");
+            actualBtn.id = "actualRouteBtn";
+            actualBtn.innerHTML = `Show Actual Route<br>Distance: ${totalDistance}, Duration:  ${totalDuration}`;
+            actualBtn.style.background = "#FF6666";
+            actualBtn.style.fontWeight = "bold";
+            actualBtn.onclick = () => {
+                showActualRoute();
+                setActiveButton(actualBtn);
+            };
+            segmentList.appendChild(actualBtn);
+        }
+
+        renderActualRouteButtons();
+    } catch (err) {
+        console.error(err);
+        alert("No segments found for actual routes: " + err.message);
+    }
+}
+
+// --- Initialize map & fetch optimized route ---
+async function initMapAndData() {
+    map = new google.maps.Map(document.getElementById("map"), {
+        zoom: 14,
+        center: { lat: 14.5995, lng: 120.9842 }
+    });
+
+    // Fetch optimized route
+    try {
+        const res = await fetch(API_URL);
+        if (!res.ok) throw new Error("API error");
+        const data = await res.json();
+        if (!data.status || !data.data) throw new Error("Invalid API response");
+        routeSegments = data.data;
+        renderOptimizedRoutes();
+    } catch (err) {
+        console.error(err);
+        alert("Error fetching optimized route: " + err.message);
+    }
+
+    // Login to get token for actual route
+    loginAndGetToken();
+}
+
+// --- Render optimized route buttons & polylines ---
+function renderOptimizedRoutes() {
+    const segmentList = document.getElementById("segmentList");
+
+    // View all segments button
+    const viewAllBtn = document.createElement("button");
+    viewAllBtn.textContent = "View All Segments";
+    viewAllBtn.style.background = "#bbb";
+    viewAllBtn.style.fontWeight = "bold";
+    viewAllBtn.onclick = () => { showAllSegments(false); setActiveButton(viewAllBtn); };
+    segmentList.appendChild(viewAllBtn);
+
+    // Full route batches
+    Object.keys(routeSegments.optimized_full_route).forEach((batchNo, batchIndex) => {
+        const batch = routeSegments.optimized_full_route[batchNo];
+        const totalDistance = batch.distance_meters ? (batch.distance_meters / 1000).toFixed(2) + ' km' : '0 km';
+        const totalDuration = batch.duration ? formatDuration(batch.duration) : '0 secs';
+
+        const batchBtn = document.createElement("button");
+        batchBtn.innerHTML = `${batchNo == 1 ? 'Initial' : 'Recalibrate'} (Triggered: ${batch.batch_created_at})<br>
+                               Distance: ${totalDistance}, Duration: ${totalDuration}`;
+        batchBtn.style.background = "#ddd";
+        batchBtn.style.fontWeight = "bold";
+        batchBtn.style.textAlign = "left";
+        batchBtn.onclick = () => { showBatch(parseInt(batchNo), true); setActiveButton(batchBtn); };
+        segmentList.appendChild(batchBtn);
+
+        // Batch segments container
+        const batchContainer = document.createElement("div");
+        batchContainer.style.marginLeft = "20px";
+        batchContainer.style.marginBottom = "10px";
+        segmentList.appendChild(batchContainer);
+
+        batch.segments.forEach(segment => {
+            const path = google.maps.geometry.encoding.decodePath(segment.polyline);
+            const polyline = new google.maps.Polyline({
+                path,
+                geodesic: true,
+                strokeColor: segment.color,
+                strokeOpacity: 0.8,
+                strokeWeight: 4,
+                map
+            });
+            polylines.push({ polyline, batchNo: parseInt(batchNo) });
+
+            new google.maps.Marker({ position: path[0], map, label: segment.from === 0 ? "Origin" : segment.from });
+            new google.maps.Marker({ position: path[path.length-1], map, label: segment.to });
+
+            const segBtn = document.createElement("button");
+            segBtn.textContent = `${segment.from === 0 ? "Origin" : segment.from} → ${segment.to}`;
+            segBtn.style.borderLeft = `8px solid ${segment.color}`;
+            segBtn.style.fontSize = "14px";
+            segBtn.style.padding = "5px 8px";
+            segBtn.onclick = () => { showSegment(polyline, false); setActiveButton(segBtn); };
+            batchContainer.appendChild(segBtn);
+        });
+
+        if (batchIndex === 0) { showBatch(parseInt(batchNo), true); setActiveButton(batchBtn); }
+    });
+
+    // --- Optimized Summary Routes Button ---
+    if(routeSegments.optimized_route && routeSegments.optimized_route.segments.length > 0){
+        const totalDist = routeSegments.optimized_route.distance_meters ?
+                        (routeSegments.optimized_route.distance_meters / 1000).toFixed(2) + ' km' : '0 km';
+        const totalDur = routeSegments.optimized_route.duration ?
+                        formatDuration(routeSegments.optimized_route.duration) : '0 secs';
+
+        const optBtn = document.createElement("button");
+        optBtn.innerHTML = `Optimized Summary Routes<br>Distance: ${totalDist}, Duration: ${totalDur}`;
+        optBtn.style.background = "#bbb";
+        optBtn.style.fontWeight = "bold";
+        optBtn.onclick = () => {
+            showOptimizedRouteFull(); 
+            setActiveButton(optBtn);
+        };
+        segmentList.appendChild(optBtn);
+
+        // Container for summary route segments
+        const optContainer = document.createElement("div");
+        optContainer.style.marginLeft = "20px";
+        optContainer.style.marginBottom = "10px";
+        segmentList.appendChild(optContainer);
+
+        // Add individual segment buttons
+        routeSegments.optimized_route.segments.forEach(segment => {
+            const segBtn = document.createElement("button");
+            segBtn.textContent = `${segment.from === 0 ? "Origin" : segment.from} → ${segment.to}`;
+            segBtn.style.borderLeft = `8px solid ${segment.color}`;
+            segBtn.style.fontSize = "14px";
+            segBtn.style.padding = "5px 8px";
+            segBtn.onclick = () => {
+                // Clear old polylines
+                polylines.forEach(obj => obj.polyline.setMap(null));
+
+                const decodedPath = google.maps.geometry.encoding.decodePath(segment.polyline);
+                const polyline = new google.maps.Polyline({
+                    path: decodedPath,
+                    geodesic: true,
+                    strokeColor: segment.color,
+                    strokeOpacity: 0.8,
+                    strokeWeight: 4,
+                    map
+                });
+
+                // Markers
+                new google.maps.Marker({ position: decodedPath[0], map, label: segment.from === 0 ? "Origin" : segment.from });
+                new google.maps.Marker({ position: decodedPath[decodedPath.length - 1], map, label: segment.to });
+
+                polylines.push({ polyline, batchNo: null });
+                setActiveButton(segBtn);
+            };
+            optContainer.appendChild(segBtn);
+        });
+    }
+}
+
+// --- Add buttons for each actual route leg ---
+function renderActualRouteButtons() {
+    const segmentList = document.getElementById("segmentList");
+
+    // Remove old actual route buttons first
+    const oldContainer = document.getElementById("actualLegsContainer");
+    if (oldContainer) oldContainer.remove();
+
+    const container = document.createElement("div");
+    container.id = "actualLegsContainer";
+    container.style.marginLeft = "10px";
+    container.style.marginBottom = "10px";
+    segmentList.appendChild(container);
+
+    actualRouteSegments.forEach((seg, index) => {
+        const btn = document.createElement("button");
+        console.log(seg);
+        btn.textContent = seg.terminal_id || 'Origin';
+        btn.style.borderLeft = `8px solid ${seg.color}`;
+        btn.style.fontSize = "14px";
+        btn.style.padding = "5px 8px";
+        btn.onclick = () => {
+            // Clear all existing polylines
+            polylines.forEach(p => p.polyline.setMap(null));
+
+            // Show only this leg
+            const polyline = new google.maps.Polyline({
+                path: seg.polyline,
+                geodesic: true,
+                strokeColor: seg.color,
+                strokeOpacity: 0.8,
+                strokeWeight: 4,
+                map
+            });
+            polylines.push({ polyline, batchNo: null });
+
+            // Markers for start and end
+            new google.maps.Marker({ position: seg.start, map, label: "Start" });
+            new google.maps.Marker({ position: seg.end, map, label: "End" });
+
+            // Focus map to this leg
+            const bounds = new google.maps.LatLngBounds();
+            seg.polyline.forEach(latlng => bounds.extend(latlng));
+            // map.fitBounds(bounds);
+
+            setActiveButton(btn);
+        };
+        container.appendChild(btn);
+    });
+}
+
+// --- Map helpers ---
+function showSegment(polyline, zoom=true) { polylines.forEach(p => p.polyline.setMap(p.polyline===polyline ? map : null)); if(zoom) fitMapToVisiblePolylines(); }
+function showBatch(batchNo, zoom=true) { polylines.forEach(p => p.polyline.setMap(p.batchNo===batchNo ? map : null)); if(zoom) fitMapToVisiblePolylines(); }
+function showAllSegments(zoom=true) { polylines.forEach(p => p.polyline.setMap(map)); if(zoom) fitMapToVisiblePolylines(); }
+function showOptimizedRouteFull() { polylines.forEach(p=>p.polyline.setMap(null)); routeSegments.optimized_route.segments.forEach(seg=>{ const path=google.maps.geometry.encoding.decodePath(seg.polyline); const polyline=new google.maps.Polyline({ path, geodesic:true, strokeColor:seg.color, strokeOpacity:0.8, strokeWeight:4, map }); polylines.push({polyline,batchNo:null}); new google.maps.Marker({position:path[0],map,label:seg.from===0?"Origin":seg.from}); new google.maps.Marker({position:path[path.length-1],map,label:seg.to}); }); fitMapToVisiblePolylines(); }
+// function showActualRoute() { polylines.forEach(p=>p.polyline.setMap(null)); actualRouteSegments.forEach(seg=>{ const polyline=new google.maps.Polyline({ path:seg.polyline, geodesic:true, strokeColor:seg.color, strokeOpacity:0.8, strokeWeight:4, map }); polylines.push({polyline,batchNo:null}); new google.maps.Marker({position:seg.start,map,label:"Start"}); new google.maps.Marker({position:seg.end,map,label:"End"}); }); fitMapToVisiblePolylines(); }
+function showActualRoute() {
+    polylines.forEach(p => p.polyline.setMap(null));
+    
+    actualRouteSegments.forEach(seg => {
+        const polyline = new google.maps.Polyline({
+            path: seg.polyline,
+            geodesic: true,
+            strokeColor: seg.color,
+            strokeOpacity: 0.8,
+            strokeWeight: 4,
+            map
+        });
+
+        new google.maps.Marker({ position: seg.start, map, label: seg.schedule_detail_id ? String(seg.schedule_detail_id) : "Start" });
+        new google.maps.Marker({ position: seg.end, map, label: "End" });
+
+        polylines.push({ polyline, batchNo: null });
+    });
+
+    fitMapToVisiblePolylines();
+}
+function fitMapToVisiblePolylines() { const bounds=new google.maps.LatLngBounds(); let any=false; polylines.forEach(p=>{ if(p.polyline.getMap()!==null){ p.polyline.getPath().forEach(latlng=>bounds.extend(latlng)); any=true; } }); if(any) map.fitBounds(bounds); }
+function setActiveButton(btn){ if(activeButton){ activeButton.style.background=""; activeButton.style.color=""; activeButton.style.fontWeight=""; } activeButton=btn; activeButton.style.background="#4CAF50"; activeButton.style.color="#fff"; activeButton.style.fontWeight="bold"; }
+function formatDuration(s){ const h=Math.floor(s/3600); const m=Math.floor((s%3600)/60); const sec=Math.round(s%60); if(h>0) return `${h}h ${m}m ${sec}s`; if(m>0) return `${m}m ${sec}s`; return `${sec}s`; }
+
+// --- Start the map & data ---
+function waitForGoogleMaps() {
+    if(window.google && google.maps) {
+        initMapAndData();
+    } else {
+        setTimeout(waitForGoogleMaps, 200);
+    }
+}
+waitForGoogleMaps();
+</script>
+
+<script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCZkJXYHmctgEV8FHRj5mns5HIXGIczDmI&libraries=geometry" async defer></script>
+</body>
+</html>
