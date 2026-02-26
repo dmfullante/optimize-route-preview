@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>ORP v1.0.1</title>
+    <title>ORP v1.0.2</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
@@ -55,7 +55,7 @@ const ACTUAL_ROUTE_API = `https://afod-platform-orurf8wr1cbbvg68p6g.etapmo.com/a
 // --- Login and store Bearer token ---
 async function loginAndGetToken(email = 'davemartin.fullante@etapinc.com', password = 'password') {
     try {
-        const res = await fetch("/api/v1/login", {
+        const res = await fetch("https://afod-platform-orurf8wr1cbbvg68p6g.etapmo.com/api/v1/login", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ email, password })
