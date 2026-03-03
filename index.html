@@ -84,6 +84,12 @@ if (!scheduleId) {
     window.location.href = "login.html";
 }
 
+const gmapsKey = localStorage.getItem("gmapsKey");
+if (!gmapsKey) {
+    alert("Google Maps API Key not found! Please login again.");
+    logout()
+}
+
 function logout() {
     localStorage.removeItem("authToken");
     window.location.href = "login.html";
@@ -317,6 +323,16 @@ function fitMapToVisiblePolylines() { const bounds=new google.maps.LatLngBounds(
 function setActiveButton(btn){ if(activeButton){ activeButton.classList.remove("bg-primary","text-white","font-bold"); } activeButton=btn; activeButton.classList.add("bg-primary","text-white","font-bold"); }
 function formatDuration(s){ const h=Math.floor(s/3600); const m=Math.floor((s%3600)/60); const sec=Math.round(s%60); if(h>0) return `${h}h ${m}m ${sec}s`; if(m>0) return `${m}m ${sec}s`; return `${sec}s`; }
 
+// Dynamically load the script
+function loadGoogleMapsAPI(callback) {
+    const script = document.createElement("script");
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${gmapsKey}&libraries=geometry`;
+    script.defer = true;
+    script.async = true;
+    script.onload = callback;
+    document.head.appendChild(script);
+}
+
 // --- Start the map & data ---
 function waitForGoogleMaps() {
     if(window.google && google.maps) {
@@ -326,9 +342,11 @@ function waitForGoogleMaps() {
         setTimeout(waitForGoogleMaps, 200);
     }
 }
-waitForGoogleMaps();
-</script>
 
-<script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCZkJXYHmctgEV8FHRj5mns5HIXGIczDmI&libraries=geometry" async defer></script>
+// Start everything after Google Maps is loaded
+loadGoogleMapsAPI(() => {
+    waitForGoogleMaps();
+});
+</script>
 </body>
 </html>

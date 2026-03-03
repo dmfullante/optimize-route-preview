@@ -70,6 +70,19 @@
             />
         </div>
 
+        <div>
+            <label class="block text-sm font-medium text-gray-600 mb-1">
+                Google Maps Key
+            </label>
+            <input 
+                type="text" 
+                id="gmapsKey"
+                placeholder="Enter Valid Key"
+                class="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary"
+                required
+            />
+        </div>
+
         <button 
             onclick="login()"
             class="w-full bg-primary text-white py-2 rounded-lg font-semibold hover:bg-green-700 transition duration-200"
@@ -78,7 +91,7 @@
         </button>
 
         <p id="errorMsg" class="text-red-500 text-sm text-center"></p>
-        <p class="text-blue-500 text-sm text-center">v1.0.3</p>
+        <p class="text-blue-500 text-sm text-center">v1.0.4</p>
     </div>
 </div>
 
@@ -90,6 +103,7 @@ async function login() {
     const email = document.getElementById("email").value;
     const password = document.getElementById("password").value;
     const scheduleId = document.getElementById("scheduleId").value;
+    const gmapsKey = document.getElementById("gmapsKey").value;
     const errorMsg = document.getElementById("errorMsg");
 
     errorMsg.textContent = "";
@@ -114,6 +128,7 @@ async function login() {
         if (!token) throw new Error("No token returned");
 
         localStorage.setItem("authToken", token);
+        localStorage.setItem("gmapsKey", gmapsKey);
 
         window.location.href = `index.html?scheduleId=${scheduleId}`;
 
