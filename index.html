@@ -1,41 +1,64 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>ORP v1.0.2</title>
+    <title>ORP - Map</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <style>
-        html, body { height: 100%; margin: 0; padding: 0; font-family: Arial, sans-serif; }
-        #container { display: flex; height: 100%; }
-        #sidebar {
-            width: 350px;
-            background: #f7f7f7;
-            padding: 10px;
-            overflow-y: auto;
-            border-right: 1px solid #ddd;
+
+    <!-- Tailwind CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#4CAF50'
+                    }
+                }
+            }
         }
-        #sidebar h2 { font-size: 16px; margin-top: 0; }
-        #sidebar button {
-            display: block;
-            width: 100%;
-            margin: 3px 0;
-            padding: 6px;
-            background: #eee;
-            border: 1px solid #ccc;
-            cursor: pointer;
-            text-align: left;
-        }
-        #sidebar button:hover { background: #ddd; }
-        #map { flex: 1; }
-    </style>
+    </script>
 </head>
-<body>
-<div id="container">
-    <div id="sidebar">
-        <h2>Optimized Route Preview</h2>
-        <div id="segmentList"></div>
+<body class="h-screen flex overflow-hidden bg-gray-100">
+
+<div id="container" class="flex w-full h-full">
+
+    <!-- Sidebar -->
+    <div id="sidebar" class="w-80 bg-white p-4 border-r border-gray-300 overflow-y-auto">
+        <div class="flex justify-between items-center mb-4">
+            <h2 class="text-lg font-bold text-gray-700">Optimized Route Preview</h2>
+            <button 
+                id="logoutBtn" 
+                class="text-sm px-2 py-1 rounded"
+                onclick="logout()"
+                title="Logout"
+            >
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h6a2 2 0 012 2v1" />
+                </svg>
+            </button>
+        </div>
+        <div id="segmentList" class="space-y-2"></div>
+        <!-- Optimized Summary Routes Button -->
+        <div class="mt-4">
+            <button 
+                id="optimizedSummaryBtn" 
+                class="w-full text-left bg-gray-200 font-bold px-3 py-2 rounded hover:bg-gray-300"
+                onclick="showOptimizedRouteFull(); setActiveButton(this);"
+            >
+                Optimized Summary Routes
+                <br>Distance: <span id="osr-distance"></span>
+                <br>Duration: <span id="osr-duration"></span>
+            </button>
+            <div id="optimizedSummarySegments" class="ml-4 mt-2 space-y-1"></div>
+        </div>
+        <div id="segmentListActualRoute" class="mt-2 space-y-2"></div>
     </div>
-    <div id="map"></div>
+
+    <!-- Map -->
+    <div id="map" class="flex-1"></div>
+
 </div>
 
 <script>
@@ -49,28 +72,26 @@ let authToken = '';
 const urlParams = new URLSearchParams(window.location.search);
 const scheduleId = urlParams.get("scheduleId");
 
-const API_URL = `https://afod-platform-orurf8wr1cbbvg68p6g.etapmo.com/api/v1/schedules/optimize/compile/${scheduleId}`;
-const ACTUAL_ROUTE_API = `https://afod-platform-orurf8wr1cbbvg68p6g.etapmo.com/api/v1/collector-location-logs/actual/route?schedule_id=${scheduleId}`;
+// 🔐 Authentication Guard
+authToken = localStorage.getItem("authToken");
 
-// --- Login and store Bearer token ---
-async function loginAndGetToken(email = 'davemartin.fullante@etapinc.com', password = 'password') {
-    try {
-        const res = await fetch("https://afod-platform-orurf8wr1cbbvg68p6g.etapmo.com/api/v1/login", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ email, password })
-        });
-        if (!res.ok) throw new Error("Login failed: " + res.status);
-        const data = await res.json();
-        if (!data.data.token) throw new Error("No token returned");
-        authToken = data.data.token;
-        console.log("Token stored:", authToken);
-        fetchActualRoute();
-    } catch (err) {
-        console.error(err);
-        alert("Login error: " + err.message);
-    }
+if (!authToken) {
+    window.location.href = "login.html";
 }
+
+if (!scheduleId) {
+    alert("No scheduleId provided.");
+    window.location.href = "login.html";
+}
+
+function logout() {
+    localStorage.removeItem("authToken");
+    window.location.href = "login.html";
+}
+
+const BASE_URL = ``;
+const API_URL = `${BASE_URL}/api/v1/schedules/optimize/compile/${scheduleId}`;
+const ACTUAL_ROUTE_API = `${BASE_URL}/api/v1/collector-location-logs/actual/route?schedule_id=${scheduleId}`;
 
 // --- Fetch actual route using token ---
 async function fetchActualRoute() {
@@ -85,6 +106,12 @@ async function fetchActualRoute() {
             }
         });
 
+        if (res.status === 401) {
+            localStorage.removeItem("authToken");
+            window.location.href = "login.html";
+            return;
+        }
+
         if (!res.ok) throw new Error("Actual route fetch failed: " + res.status);
 
         const data = await res.json();
@@ -93,11 +120,8 @@ async function fetchActualRoute() {
         const legs = data.data.routes.legs;
         actualRouteSegments.length = 0; // clear previous
 
-        // Generate a unique color per segment
         legs.forEach((leg, index) => {
             const decodedPath = google.maps.geometry.encoding.decodePath(leg.polyline.encodedPolyline);
-
-            // Unique color via HSL (hue changes per index)
             const hue = (index * 360 / legs.length) % 360;
             const color = `hsl(${hue}, 80%, 50%)`;
 
@@ -112,8 +136,7 @@ async function fetchActualRoute() {
             });
         });
 
-        // Add Actual Route button if not exists
-        const segmentList = document.getElementById("segmentList");
+        const segmentList = document.getElementById("segmentListActualRoute");
         if (!document.getElementById("actualRouteBtn")) {
             const totalDistanceMeters = data.data.totalDistanceMeters || 0;
             const totalDurationSecs = data.data.totalDuration || 0;
@@ -122,13 +145,9 @@ async function fetchActualRoute() {
 
             const actualBtn = document.createElement("button");
             actualBtn.id = "actualRouteBtn";
-            actualBtn.innerHTML = `Show Actual Route<br>Distance: ${totalDistance}, Duration:  ${totalDuration}`;
-            actualBtn.style.background = "#FF6666";
-            actualBtn.style.fontWeight = "bold";
-            actualBtn.onclick = () => {
-                showActualRoute();
-                setActiveButton(actualBtn);
-            };
+            actualBtn.innerHTML = `Show Actual Route<br>Distance: ${totalDistance},<br>Duration:  ${totalDuration}`;
+            actualBtn.className = "w-full text-left bg-red-500 text-white font-bold px-3 py-2 rounded hover:bg-red-600";
+            actualBtn.onclick = () => { showActualRoute(); setActiveButton(actualBtn); };
             segmentList.appendChild(actualBtn);
         }
 
@@ -146,7 +165,6 @@ async function initMapAndData() {
         center: { lat: 14.5995, lng: 120.9842 }
     });
 
-    // Fetch optimized route
     try {
         const res = await fetch(API_URL);
         if (!res.ok) throw new Error("API error");
@@ -158,20 +176,15 @@ async function initMapAndData() {
         console.error(err);
         alert("Error fetching optimized route: " + err.message);
     }
-
-    // Login to get token for actual route
-    loginAndGetToken();
 }
 
 // --- Render optimized route buttons & polylines ---
 function renderOptimizedRoutes() {
     const segmentList = document.getElementById("segmentList");
 
-    // View all segments button
     const viewAllBtn = document.createElement("button");
     viewAllBtn.textContent = "View All Segments";
-    viewAllBtn.style.background = "#bbb";
-    viewAllBtn.style.fontWeight = "bold";
+    viewAllBtn.className = "w-full text-left bg-gray-300 font-bold px-3 py-2 rounded hover:bg-gray-400";
     viewAllBtn.onclick = () => { showAllSegments(false); setActiveButton(viewAllBtn); };
     segmentList.appendChild(viewAllBtn);
 
@@ -182,18 +195,14 @@ function renderOptimizedRoutes() {
         const totalDuration = batch.duration ? formatDuration(batch.duration) : '0 secs';
 
         const batchBtn = document.createElement("button");
-        batchBtn.innerHTML = `${batchNo == 1 ? 'Initial' : 'Recalibrate'} (Triggered: ${batch.batch_created_at})<br>
-                               Distance: ${totalDistance}, Duration: ${totalDuration}`;
-        batchBtn.style.background = "#ddd";
-        batchBtn.style.fontWeight = "bold";
-        batchBtn.style.textAlign = "left";
+        batchBtn.innerHTML = `${batchNo == 1 ? 'Initial' : 'Recalibrate'}<br>Triggered: ${batch.batch_created_at}<br>
+                               Distance: ${totalDistance},<br>Duration: ${totalDuration}`;
+        batchBtn.className = "w-full text-left bg-gray-200 font-bold px-3 py-2 rounded hover:bg-gray-300";
         batchBtn.onclick = () => { showBatch(parseInt(batchNo), true); setActiveButton(batchBtn); };
         segmentList.appendChild(batchBtn);
 
-        // Batch segments container
         const batchContainer = document.createElement("div");
-        batchContainer.style.marginLeft = "20px";
-        batchContainer.style.marginBottom = "10px";
+        batchContainer.className = "ml-4 mb-2 space-y-1";
         segmentList.appendChild(batchContainer);
 
         batch.segments.forEach(segment => {
@@ -213,9 +222,7 @@ function renderOptimizedRoutes() {
 
             const segBtn = document.createElement("button");
             segBtn.textContent = `${segment.from === 0 ? "Origin" : segment.from} → ${segment.to}`;
-            segBtn.style.borderLeft = `8px solid ${segment.color}`;
-            segBtn.style.fontSize = "14px";
-            segBtn.style.padding = "5px 8px";
+            segBtn.className = `w-full text-left px-3 py-1 text-sm rounded border-l-4 border-[${segment.color}] hover:bg-gray-100`;
             segBtn.onclick = () => { showSegment(polyline, false); setActiveButton(segBtn); };
             batchContainer.appendChild(segBtn);
         });
@@ -223,36 +230,22 @@ function renderOptimizedRoutes() {
         if (batchIndex === 0) { showBatch(parseInt(batchNo), true); setActiveButton(batchBtn); }
     });
 
-    // --- Optimized Summary Routes Button ---
-    if(routeSegments.optimized_route && routeSegments.optimized_route.segments.length > 0){
+    if (routeSegments.optimized_route && routeSegments.optimized_route.segments.length > 0) {
         const totalDist = routeSegments.optimized_route.distance_meters ?
                         (routeSegments.optimized_route.distance_meters / 1000).toFixed(2) + ' km' : '0 km';
         const totalDur = routeSegments.optimized_route.duration ?
                         formatDuration(routeSegments.optimized_route.duration) : '0 secs';
+        document.getElementById('osr-distance').textContent = totalDist
+        document.getElementById('osr-duration').textContent =totalDur
+        const summaryContainer = document.getElementById("optimizedSummarySegments");
 
-        const optBtn = document.createElement("button");
-        optBtn.innerHTML = `Optimized Summary Routes<br>Distance: ${totalDist}, Duration: ${totalDur}`;
-        optBtn.style.background = "#bbb";
-        optBtn.style.fontWeight = "bold";
-        optBtn.onclick = () => {
-            showOptimizedRouteFull(); 
-            setActiveButton(optBtn);
-        };
-        segmentList.appendChild(optBtn);
+        // Clear previous
+        summaryContainer.innerHTML = "";
 
-        // Container for summary route segments
-        const optContainer = document.createElement("div");
-        optContainer.style.marginLeft = "20px";
-        optContainer.style.marginBottom = "10px";
-        segmentList.appendChild(optContainer);
-
-        // Add individual segment buttons
         routeSegments.optimized_route.segments.forEach(segment => {
             const segBtn = document.createElement("button");
             segBtn.textContent = `${segment.from === 0 ? "Origin" : segment.from} → ${segment.to}`;
-            segBtn.style.borderLeft = `8px solid ${segment.color}`;
-            segBtn.style.fontSize = "14px";
-            segBtn.style.padding = "5px 8px";
+            segBtn.className = `w-full text-left px-3 py-1 text-sm rounded border-l-4 border-[${segment.color}] hover:bg-gray-100`;
             segBtn.onclick = () => {
                 // Clear old polylines
                 polylines.forEach(obj => obj.polyline.setMap(null));
@@ -274,37 +267,29 @@ function renderOptimizedRoutes() {
                 polylines.push({ polyline, batchNo: null });
                 setActiveButton(segBtn);
             };
-            optContainer.appendChild(segBtn);
+            summaryContainer.appendChild(segBtn);
         });
     }
 }
 
 // --- Add buttons for each actual route leg ---
 function renderActualRouteButtons() {
-    const segmentList = document.getElementById("segmentList");
+    const segmentList = document.getElementById("segmentListActualRoute");
 
-    // Remove old actual route buttons first
     const oldContainer = document.getElementById("actualLegsContainer");
     if (oldContainer) oldContainer.remove();
 
     const container = document.createElement("div");
     container.id = "actualLegsContainer";
-    container.style.marginLeft = "10px";
-    container.style.marginBottom = "10px";
+    container.className = "ml-2 mb-2 space-y-1";
     segmentList.appendChild(container);
 
-    actualRouteSegments.forEach((seg, index) => {
+    actualRouteSegments.forEach((seg) => {
         const btn = document.createElement("button");
-        console.log(seg);
         btn.textContent = seg.terminal_id || 'Origin';
-        btn.style.borderLeft = `8px solid ${seg.color}`;
-        btn.style.fontSize = "14px";
-        btn.style.padding = "5px 8px";
+        btn.className = `w-full text-left px-3 py-1 text-sm rounded border-l-4 border-[${seg.color}] hover:bg-gray-100`;
         btn.onclick = () => {
-            // Clear all existing polylines
             polylines.forEach(p => p.polyline.setMap(null));
-
-            // Show only this leg
             const polyline = new google.maps.Polyline({
                 path: seg.polyline,
                 geodesic: true,
@@ -314,16 +299,8 @@ function renderActualRouteButtons() {
                 map
             });
             polylines.push({ polyline, batchNo: null });
-
-            // Markers for start and end
             new google.maps.Marker({ position: seg.start, map, label: "Start" });
             new google.maps.Marker({ position: seg.end, map, label: "End" });
-
-            // Focus map to this leg
-            const bounds = new google.maps.LatLngBounds();
-            seg.polyline.forEach(latlng => bounds.extend(latlng));
-            // map.fitBounds(bounds);
-
             setActiveButton(btn);
         };
         container.appendChild(btn);
@@ -334,37 +311,17 @@ function renderActualRouteButtons() {
 function showSegment(polyline, zoom=true) { polylines.forEach(p => p.polyline.setMap(p.polyline===polyline ? map : null)); if(zoom) fitMapToVisiblePolylines(); }
 function showBatch(batchNo, zoom=true) { polylines.forEach(p => p.polyline.setMap(p.batchNo===batchNo ? map : null)); if(zoom) fitMapToVisiblePolylines(); }
 function showAllSegments(zoom=true) { polylines.forEach(p => p.polyline.setMap(map)); if(zoom) fitMapToVisiblePolylines(); }
+function showActualRoute() { polylines.forEach(p=>p.polyline.setMap(null)); actualRouteSegments.forEach(seg=>{ const polyline=new google.maps.Polyline({ path:seg.polyline, geodesic:true, strokeColor:seg.color, strokeOpacity:0.8, strokeWeight:4, map }); polylines.push({polyline,batchNo:null}); new google.maps.Marker({position:seg.start,map,label:seg.schedule_detail_id?String(seg.schedule_detail_id):"Start"}); new google.maps.Marker({position:seg.end,map,label:"End"}); }); fitMapToVisiblePolylines(); }
 function showOptimizedRouteFull() { polylines.forEach(p=>p.polyline.setMap(null)); routeSegments.optimized_route.segments.forEach(seg=>{ const path=google.maps.geometry.encoding.decodePath(seg.polyline); const polyline=new google.maps.Polyline({ path, geodesic:true, strokeColor:seg.color, strokeOpacity:0.8, strokeWeight:4, map }); polylines.push({polyline,batchNo:null}); new google.maps.Marker({position:path[0],map,label:seg.from===0?"Origin":seg.from}); new google.maps.Marker({position:path[path.length-1],map,label:seg.to}); }); fitMapToVisiblePolylines(); }
-// function showActualRoute() { polylines.forEach(p=>p.polyline.setMap(null)); actualRouteSegments.forEach(seg=>{ const polyline=new google.maps.Polyline({ path:seg.polyline, geodesic:true, strokeColor:seg.color, strokeOpacity:0.8, strokeWeight:4, map }); polylines.push({polyline,batchNo:null}); new google.maps.Marker({position:seg.start,map,label:"Start"}); new google.maps.Marker({position:seg.end,map,label:"End"}); }); fitMapToVisiblePolylines(); }
-function showActualRoute() {
-    polylines.forEach(p => p.polyline.setMap(null));
-    
-    actualRouteSegments.forEach(seg => {
-        const polyline = new google.maps.Polyline({
-            path: seg.polyline,
-            geodesic: true,
-            strokeColor: seg.color,
-            strokeOpacity: 0.8,
-            strokeWeight: 4,
-            map
-        });
-
-        new google.maps.Marker({ position: seg.start, map, label: seg.schedule_detail_id ? String(seg.schedule_detail_id) : "Start" });
-        new google.maps.Marker({ position: seg.end, map, label: "End" });
-
-        polylines.push({ polyline, batchNo: null });
-    });
-
-    fitMapToVisiblePolylines();
-}
 function fitMapToVisiblePolylines() { const bounds=new google.maps.LatLngBounds(); let any=false; polylines.forEach(p=>{ if(p.polyline.getMap()!==null){ p.polyline.getPath().forEach(latlng=>bounds.extend(latlng)); any=true; } }); if(any) map.fitBounds(bounds); }
-function setActiveButton(btn){ if(activeButton){ activeButton.style.background=""; activeButton.style.color=""; activeButton.style.fontWeight=""; } activeButton=btn; activeButton.style.background="#4CAF50"; activeButton.style.color="#fff"; activeButton.style.fontWeight="bold"; }
+function setActiveButton(btn){ if(activeButton){ activeButton.classList.remove("bg-primary","text-white","font-bold"); } activeButton=btn; activeButton.classList.add("bg-primary","text-white","font-bold"); }
 function formatDuration(s){ const h=Math.floor(s/3600); const m=Math.floor((s%3600)/60); const sec=Math.round(s%60); if(h>0) return `${h}h ${m}m ${sec}s`; if(m>0) return `${m}m ${sec}s`; return `${sec}s`; }
 
 // --- Start the map & data ---
 function waitForGoogleMaps() {
     if(window.google && google.maps) {
         initMapAndData();
+        fetchActualRoute();
     } else {
         setTimeout(waitForGoogleMaps, 200);
     }
